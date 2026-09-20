@@ -13,7 +13,6 @@ on:
       - 'Packages/com.setsuodu.simdjson/Native/**'
       - '.github/workflows/build-native.yml'
     tags:
-      # Only package-namespaced tags (OpenUPM-compatible)
       - 'com.setsuodu.simdjson/*'
   pull_request:
     paths:
@@ -34,134 +33,132 @@ env:
   NATIVE_DIR: Packages/com.setsuodu.simdjson/Native
   PLUGINS_DIR: Packages/com.setsuodu.simdjson/Runtime/Plugins
   PACKAGE_NAME: com.setsuodu.simdjson
+  ANDROID_API: android-24
+  NDK_VERSION: r27c
 
 jobs:
-  build:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Linux x86_64
-          - name: Linux x86_64
-            os: ubuntu-latest
-            platform: linux
-            arch: x86_64
-            lib_name: libsimdjson_unity.so
-            cmake_args: ""
-
-          # Linux aarch64 (native arm runner)
-          - name: Linux aarch64
-            os: ubuntu-24.04-arm
-            platform: linux
-            arch: arm64
-            lib_name: libsimdjson_unity.so
-            cmake_args: ""
-
-          # Windows x86_64
-          - name: Windows x86_64
-            os: windows-latest
-            platform: windows
-            arch: x86_64
-            lib_name: simdjson_unity.dll
-            cmake_args: ""
-
-          # macOS arm64 (Apple Silicon)
-          - name: macOS arm64
-            os: macos-latest
-            platform: macos
-            arch: arm64
-            lib_name: libsimdjson_unity.dylib
-            cmake_args: "-DCMAKE_OSX_ARCHITECTURES=arm64"
-
-          # macOS x86_64 (Intel)
-          - name: macOS x86_64
-            os: macos-13
-            platform: macos
-            arch: x86_64
-            lib_name: libsimdjson_unity.dylib
-            cmake_args: "-DCMAKE_OSX_ARCHITECTURES=x86_64"
-
+  # ── Windows (Editor / Standalone Win64) ───────────────────────────────────
+  windows:
+    name: Windows x86_64
+    runs-on: windows-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup CMake
-        uses: lukka/get-cmake@latest
+      - uses: lukka/get-cmake@latest
 
       - name: Configure & Build
         shell: bash
         working-directory: ${{ env.NATIVE_DIR }}
         run: |
           set -euo pipefail
-          mkdir -p build
-          cd build
-
-          # shellcheck disable=SC2086
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            ${{ matrix.cmake_args }}
-
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release --parallel
+          find . -type f \( -name '*.dll' -o -name '*.so' -o -name '*.dylib' \) -ls || true
 
-          echo "=== Build outputs ==="
-          find . -type f \( -name "*.so" -o -name "*.dll" -o -name "*.dylib" -o -name "*.a" \) -ls || true
-
-      - name: Collect artifact
+      - name: Collect
         shell: bash
         run: |
           set -euo pipefail
-          OUT="artifact/${{ matrix.platform }}/${{ matrix.arch }}"
+          OUT=artifact/windows/x86_64
           mkdir -p "$OUT"
-
-          # Locate the built shared library (CMake may put it under build/, build/Release/, etc.)
-          LIB=$(find "${{ env.NATIVE_DIR }}/build" -type f \
-            \( -name "${{ matrix.lib_name }}" -o -name "*simdjson_unity*" \) \
-            ! -name "*.lib" ! -name "*.exp" ! -name "*.pdb" \
-            | head -n 1)
-
-          if [ -z "$LIB" ]; then
-            echo "ERROR: could not find built library"
-            find "${{ env.NATIVE_DIR }}/build" -type f | head -50
-            exit 1
-          fi
-
-          echo "Found: $LIB"
-          cp "$LIB" "$OUT/${{ matrix.lib_name }}"
+          LIB=$(find "${{ env.NATIVE_DIR }}/build" -type f -name 'simdjson_unity.dll' | head -n1)
+          test -n "$LIB"
+          cp "$LIB" "$OUT/simdjson_unity.dll"
           ls -la "$OUT"
 
-          # Record build info
-          {
-            echo "platform=${{ matrix.platform }}"
-            echo "arch=${{ matrix.arch }}"
-            echo "runner=${{ matrix.os }}"
-            echo "lib=${{ matrix.lib_name }}"
-            echo "sha=${{ github.sha }}"
-            echo "ref=${{ github.ref }}"
-            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          } > "$OUT/build-info.txt"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: native-${{ matrix.platform }}-${{ matrix.arch }}
-          path: artifact/${{ matrix.platform }}/${{ matrix.arch }}/
+          name: native-windows-x86_64
+          path: artifact/windows/x86_64/
           if-no-files-found: error
           retention-days: 30
 
-  # Assemble into Unity Plugins layout; on package tag attach to GitHub Release
+  # ── Android (NDK, multiple ABIs) ──────────────────────────────────────────
+  android:
+    name: Android ${{ matrix.abi }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        abi:
+          - arm64-v8a
+          - armeabi-v7a
+          # - x86_64   # emulator only — uncomment when needed
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: lukka/get-cmake@latest
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: false
+
+      - name: Configure & Build
+        shell: bash
+        working-directory: ${{ env.NATIVE_DIR }}
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          mkdir -p "build-android-${{ matrix.abi }}"
+          cd "build-android-${{ matrix.abi }}"
+
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=${{ env.ANDROID_API }} \
+            -DANDROID_STL=c++_static \
+            -DCMAKE_BUILD_TYPE=Release
+
+          cmake --build . --config Release --parallel
+
+          find . -type f -name '*.so' -ls || true
+
+      - name: Collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="artifact/android/${{ matrix.abi }}"
+          mkdir -p "$OUT"
+          LIB=$(find "${{ env.NATIVE_DIR }}/build-android-${{ matrix.abi }}" \
+            -type f -name 'libsimdjson_unity.so' | head -n1)
+          test -n "$LIB"
+          cp "$LIB" "$OUT/libsimdjson_unity.so"
+          ls -la "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-android-${{ matrix.abi }}
+          path: artifact/android/${{ matrix.abi }}/
+          if-no-files-found: error
+          retention-days: 30
+
+  # ── Optional desktop (disabled by default — re-enable when needed) ───────
+  # linux:
+  #   name: Linux x86_64
+  #   runs-on: ubuntu-latest
+  #   ...
+  #
+  # macos:
+  #   name: macOS arm64
+  #   runs-on: macos-latest
+  #   ...
+  # Avoid macos-13 (Intel) — runner pool is tiny and queues for hours.
+
+  # ── Package into Unity Plugins layout ─────────────────────────────────────
   package:
     name: Package plugins
-    needs: build
+    needs: [windows, android]
     runs-on: ubuntu-latest
-    if: always() && needs.build.result == 'success'
+    if: always() && needs.windows.result == 'success' && needs.android.result == 'success'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Download all native artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: downloaded
           pattern: native-*
@@ -175,26 +172,27 @@ jobs:
           mkdir -p "$PLUGINS"
 
           layout() {
-            local src_dir="$1" dest_dir="$2" name="$3"
-            mkdir -p "$dest_dir"
-            if [ -f "$src_dir/$name" ]; then
-              cp -v "$src_dir/$name" "$dest_dir/$name"
+            local src="$1" dest="$2" name="$3"
+            mkdir -p "$dest"
+            if [ -f "$src/$name" ]; then
+              cp -v "$src/$name" "$dest/$name"
             else
-              echo "WARN: missing $src_dir/$name"
+              echo "WARN: missing $src/$name"
+              exit 1
             fi
           }
 
-          layout "downloaded/native-linux-x86_64"   "$PLUGINS/x86_64"        "libsimdjson_unity.so"
-          layout "downloaded/native-linux-arm64"    "$PLUGINS/ARM64"         "libsimdjson_unity.so"
-          layout "downloaded/native-windows-x86_64" "$PLUGINS/x86_64"        "simdjson_unity.dll"
-          layout "downloaded/native-macos-arm64"    "$PLUGINS/macOS/arm64"   "libsimdjson_unity.dylib"
-          layout "downloaded/native-macos-x86_64"   "$PLUGINS/macOS/x86_64"  "libsimdjson_unity.dylib"
+          # Windows Editor / Standalone
+          layout downloaded/native-windows-x86_64 "$PLUGINS/x86_64" "simdjson_unity.dll"
+
+          # Android (Unity expects ABI folder names under Android/)
+          layout downloaded/native-android-arm64-v8a  "$PLUGINS/Android/libs/arm64-v8a"  "libsimdjson_unity.so"
+          layout downloaded/native-android-armeabi-v7a "$PLUGINS/Android/libs/armeabi-v7a" "libsimdjson_unity.so"
 
           echo "=== Final Plugins tree ==="
           find "$PLUGINS" -type f | sort
 
-      - name: Upload packaged plugins
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: unity-plugins-all
           path: ${{ env.PLUGINS_DIR }}/
@@ -210,17 +208,14 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           git add "${{ env.PLUGINS_DIR }}"
           if git diff --staged --quiet; then
             echo "No plugin changes to commit."
             exit 0
           fi
-
           git commit -m "chore: update native plugins from CI (${{ github.sha }})"
           git push
 
-      # On package tag (com.setsuodu.simdjson/<semver>): publish GitHub Release with plugins
       - name: Create GitHub Release (package tag only)
         if: startsWith(github.ref, format('refs/tags/{0}/', env.PACKAGE_NAME))
         uses: softprops/action-gh-release@v2
@@ -229,8 +224,7 @@ jobs:
           generate_release_notes: true
           files: |
             ${{ env.PLUGINS_DIR }}/x86_64/*
-            ${{ env.PLUGINS_DIR }}/ARM64/*
-            ${{ env.PLUGINS_DIR }}/macOS/arm64/*
-            ${{ env.PLUGINS_DIR }}/macOS/x86_64/*
+            ${{ env.PLUGINS_DIR }}/Android/libs/arm64-v8a/*
+            ${{ env.PLUGINS_DIR }}/Android/libs/armeabi-v7a/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
