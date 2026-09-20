@@ -1,29 +1,21 @@
 # SimdJSON for Unity (`com.setsuodu.simdjson`)
 
-High-performance **SIMD-accelerated JSON parser** for Unity, powered by the excellent [simdjson](https://simdjson.org/) C++ library.
+High-performance **SIMD-accelerated JSON parser** for Unity, powered by [simdjson](https://simdjson.org/).
 
 ## Features
 
-- Full runtime C# API (`Parser`, `Document`, `Element`) covering:
-  - Parse (string / UTF-8 bytes)
-  - Validate
-  - Minify
-  - Scalar getters: `GetBool`, `GetInt64`, `GetUInt64`, `GetDouble`, `GetString`
-  - Object: `ObjectCount`, `FindField`, `TryGetObjectAt`, indexer
-  - Array: `ArrayCount`, `ArrayAt`, `TryArrayAt`, indexer
-  - Nested access
-  - Proper error codes via `SimdJsonException`
-- Native plugin built from official simdjson single-header (v4.6.x)
-- Sample scene script that **demos every method** and runs a **benchmark vs `com.unity.nuget.newtonsoft-json`** (AOT-ready)
-- OpenUPM / UPM ready package layout
+- Runtime C# API (`Parser`, `Document`, `Element`): parse / validate / minify, scalars, object & array access, nested fields, `SimdJsonException`
+- Native plugin from official simdjson single-header
+- Sample + benchmark vs `com.unity.nuget.newtonsoft-json` (AOT-ready)
+- OpenUPM / UPM package layout
 
-## Installation (OpenUPM)
+## Installation
 
 ```bash
 openupm add com.setsuodu.simdjson
 ```
 
-Or add the scoped registry and dependency manually in `Packages/manifest.json`.
+Or add the OpenUPM scoped registry and dependency in `Packages/manifest.json`.
 
 ## Quick Start
 
@@ -39,56 +31,98 @@ using (var hello = root.FindField("hello"))
 }
 ```
 
-## Releasing / Git tags (OpenUPM)
+---
 
-Per [ADR-0003](https://github.com/LongLongGames/.github/blob/main/docs/adr/0003-openupm-gittagprefix.md):
+## Releases & downloading native plugins
 
-| Purpose | Tag format | Consumer |
-|---------|------------|----------|
-| **This Unity package** | `com.setsuodu.simdjson/<semver>` | OpenUPM |
-| Example | `com.setsuodu.simdjson/1.0.0` | |
+Built plugins are published to:
 
-**Rules**
+**https://github.com/setsuodu/simdjson/releases**
 
-- Package tags **must** use the package name + `/` prefix.
-- **Do not** create bare tags (`1.0.0`, `v1.0.0`) — OpenUPM scans all tags and will mis-ingest them.
-- Do **not** put `gitTagPrefix` in `package.json` (not a Unity field). Set it only in OpenUPM metadata:
+Each formal release includes:
 
-  ```yaml
-  # openupm/openupm → data/packages/com.setsuodu.simdjson.yml
-  name: com.setsuodu.simdjson
-  gitTagPrefix: 'com.setsuodu.simdjson/'
-  ```
+| Asset | Contents |
+|-------|----------|
+| `simdjson-native-plugins-<ver>.zip` | Full `Runtime/Plugins` tree |
+| `simdjson_unity.dll` | Windows x64 |
+| `libsimdjson_unity.so` (arm64-v8a) | Android 64-bit |
+| `libsimdjson_unity.so` (armeabi-v7a) | Android 32-bit |
 
-- `package.json` `version` must match the version segment of the tag.
+Unpack the zip into the package’s `Runtime/Plugins/` (or copy individual files into the paths below), then in Unity set plugin import settings (CPU / OS / Android ABI).
+
+### Plugin layout
+
+```
+Runtime/Plugins/
+  x86_64/
+    simdjson_unity.dll              # Windows
+  Android/libs/
+    arm64-v8a/libsimdjson_unity.so
+    armeabi-v7a/libsimdjson_unity.so
+```
+
+---
+
+## How a GitHub Release is created
+
+### Formal release (OpenUPM + Releases page)
+
+1. Set `version` in this package’s `package.json` (e.g. `1.0.0`).
+2. Push a **namespaced** tag only:
 
 ```bash
-# Release example
 git tag com.setsuodu.simdjson/1.0.0
 git push origin com.setsuodu.simdjson/1.0.0
 ```
 
-CI runs on those tags and attaches multi-platform native plugins to the GitHub Release.
+3. Workflow [Build Native Plugins](../../.github/workflows/build-native.yml) runs, builds Win + Android, and creates a [GitHub Release](https://github.com/setsuodu/simdjson/releases) for that tag with the zip + binaries.
 
-## Building the Native Plugin
+### Manual / test build (no OpenUPM version)
 
-### CI (recommended)
+1. GitHub → **Actions** → **Build Native Plugins** → **Run workflow**
+2. Optional:
+   - **commit_plugins** — write binaries back into `Runtime/Plugins` on `main`
+   - **publish_prerelease** — attach zip to a **pre-release** named `native-ci-<sha>` (not a package version tag)
 
-Workflow [`.github/workflows/build-native.yml`](../../.github/workflows/build-native.yml) builds:
+Ordinary pushes only upload **Actions artifacts** (30-day retention); they do **not** appear on the Releases page.
 
-| Platform | Arch     | Output                        |
-|----------|----------|-------------------------------|
-| Linux    | x86_64   | `libsimdjson_unity.so`        |
-| Linux    | arm64    | `libsimdjson_unity.so`        |
-| Windows  | x86_64   | `simdjson_unity.dll`          |
-| macOS    | arm64    | `libsimdjson_unity.dylib`     |
-| macOS    | x86_64   | `libsimdjson_unity.dylib`     |
+---
 
-Triggers:
+## Git tags (OpenUPM) — required naming
 
-- Push/PR touching `Native/`
-- Tags matching `com.setsuodu.simdjson/*`
-- Manual: Actions → *Build Native Plugins* (optional **commit_plugins**)
+Per [ADR-0003](https://github.com/LongLongGames/.github/blob/main/docs/adr/0003-openupm-gittagprefix.md):
+
+| Use | Tag format | Example |
+|-----|------------|---------|
+| This Unity package | `com.setsuodu.simdjson/<semver>` | `com.setsuodu.simdjson/1.0.0` |
+
+**Rules**
+
+- Tag **must** start with package name + `/`.
+- **Forbidden**: bare `1.0.0`, `v1.0.0` — OpenUPM scans all tags and will mis-ingest them.
+- Do **not** put `gitTagPrefix` in `package.json`. Configure it only in OpenUPM metadata:
+
+```yaml
+# openupm/openupm → data/packages/com.setsuodu.simdjson.yml
+name: com.setsuodu.simdjson
+gitTagPrefix: 'com.setsuodu.simdjson/'
+```
+
+- `package.json` `version` must equal the version segment of the tag.
+
+---
+
+## Native CI (current matrix)
+
+| Platform | Runner | Output |
+|----------|--------|--------|
+| Windows x86_64 | `windows-latest` | `simdjson_unity.dll` |
+| Android arm64-v8a | Ubuntu + NDK | `libsimdjson_unity.so` |
+| Android armeabi-v7a | Ubuntu + NDK | `libsimdjson_unity.so` |
+
+Linux / macOS jobs are disabled for now (can be re-enabled in the workflow when needed). Avoid `macos-13` (Intel) — runner queue is often hours long.
+
+**Triggers:** push/PR on `Native/**`, tags `com.setsuodu.simdjson/*`, or manual `workflow_dispatch`.
 
 ### Local build
 
@@ -96,37 +130,34 @@ Triggers:
 cd Packages/com.setsuodu.simdjson/Native
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-# macOS arm64:
-# cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
 cmake --build . --config Release
 ```
 
-Copy into `Runtime/Plugins/` and set Unity import settings (CPU / OS):
+Android (example arm64-v8a):
 
-```
-Runtime/Plugins/
-  x86_64/
-    libsimdjson_unity.so      # Linux
-    simdjson_unity.dll        # Windows
-  ARM64/
-    libsimdjson_unity.so      # Linux arm64
-  macOS/
-    arm64/libsimdjson_unity.dylib
-    x86_64/libsimdjson_unity.dylib
+```bash
+cmake .. \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-24 \
+  -DANDROID_STL=c++_static \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build . --config Release
 ```
 
-> **Note**: simdjson requires a 64-bit platform and a C++17 compiler. On-demand API is single-pass; keep the `Document` alive while using `Element`s.
+> simdjson needs 64-bit + C++17. On-demand API is single-pass; keep `Document` alive while using `Element`s.
+
+---
 
 ## Benchmark
 
-The sample (`Samples~/SimdJsonDemo.cs`) compares parse + light traversal against Newtonsoft.Json (`JToken.Parse`). On typical desktop hardware you can expect **several times** higher throughput for large payloads thanks to SIMD.
+Sample (`Samples~/SimdJsonDemo.cs`) compares parse + light traversal against Newtonsoft.Json. Large payloads are typically several times faster thanks to SIMD.
 
 ## License
 
 - This Unity package wrapper: MIT
-- simdjson: Apache-2.0 (see upstream)
+- simdjson: Apache-2.0 (upstream)
 
 ## Credits
 
 - [simdjson](https://github.com/simdjson/simdjson) by Daniel Lemire et al.
-- Unity package structure designed for OpenUPM distribution.
