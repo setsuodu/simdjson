@@ -41,18 +41,50 @@ using (var hello = root.FindField("hello"))
 
 ## Building the Native Plugin
 
-Prebuilt `libsimdjson_unity.so` (Linux x86_64) is included under `Runtime/Plugins/x86_64/`.
+### CI (recommended)
 
-For other platforms (Windows, macOS, Android, iOS):
+GitHub Actions workflow [`.github/workflows/build-native.yml`](../../.github/workflows/build-native.yml) builds for:
+
+| Platform | Arch     | Output                        |
+|----------|----------|-------------------------------|
+| Linux    | x86_64   | `libsimdjson_unity.so`        |
+| Linux    | arm64    | `libsimdjson_unity.so`        |
+| Windows  | x86_64   | `simdjson_unity.dll`          |
+| macOS    | arm64    | `libsimdjson_unity.dylib`     |
+| macOS    | x86_64   | `libsimdjson_unity.dylib`     |
+
+- **Automatic** on push/PR that touch `Native/`
+- **Manual**: Actions → *Build Native Plugins* → Run workflow
+  - Optional: check **commit_plugins** to push binaries back into `Runtime/Plugins/`
+
+Artifacts are uploaded as `native-<platform>-<arch>` and a combined `unity-plugins-all`.
+
+### Local build
 
 ```bash
-cd Native
-mkdir build && cd build
+cd Packages/com.setsuodu.simdjson/Native
+mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build .
+# macOS arm64 example:
+# cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+cmake --build . --config Release
 ```
 
-Then copy the resulting shared library into the appropriate `Runtime/Plugins/<platform>/` folder and set Unity plugin import settings (CPU, OS).
+Copy the resulting shared library into the matching folder under `Runtime/Plugins/` and set Unity plugin import settings (CPU / OS).
+
+Suggested layout:
+
+```
+Runtime/Plugins/
+  x86_64/
+    libsimdjson_unity.so      # Linux
+    simdjson_unity.dll        # Windows
+  ARM64/
+    libsimdjson_unity.so      # Linux arm64
+  macOS/
+    arm64/libsimdjson_unity.dylib
+    x86_64/libsimdjson_unity.dylib
+```
 
 > **Note**: simdjson requires a 64-bit platform and a C++17 compiler. On-demand API is single-pass; keep the `Document` alive while using `Element`s.
 
@@ -67,5 +99,5 @@ The sample (`Samples~/SimdJsonDemo.cs`) compares parse + light traversal against
 
 ## Credits
 
-- [simdjson](https://github.com/setsuodu/simdjson) by Daniel Lemire et al.
+- [simdjson](https://github.com/simdjson/simdjson) by Daniel Lemire et al.
 - Unity package structure designed for OpenUPM distribution.
