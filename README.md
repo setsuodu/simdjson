@@ -21,13 +21,13 @@ openupm add com.setsuodu.simdjson
 2. Tag with the **package-name prefix** (required by [ADR-0003](https://github.com/LongLongGames/.github/blob/main/docs/adr/0003-openupm-gittagprefix.md)):
 
 ```bash
-git tag com.setsuodu.simdjson/1.0.0
-git push origin com.setsuodu.simdjson/1.0.0
+git tag com.setsuodu.simdjson/v1.0.0
+git push origin com.setsuodu.simdjson/v1.0.0
 ```
 
 3. CI builds Windows + Android natives and attaches them to a [GitHub Release](https://github.com/setsuodu/simdjson/releases) for that tag.
 
-**Do not** use bare tags like `v1.0.0` or `1.0.0` — OpenUPM will mis-scan them.
+**Do not** use bare tags like `1.0.0` or `v1.0.0` — OpenUPM will mis-scan them.
 
 ## Native plugins (current CI)
 

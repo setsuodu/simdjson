@@ -67,12 +67,12 @@ Runtime/Plugins/
 
 ### Formal release (OpenUPM + Releases page)
 
-1. Set `version` in this package’s `package.json` (e.g. `1.0.0`).
+1. Set `version` in this package’s `package.json` (e.g. `v1.0.0`).
 2. Push a **namespaced** tag only:
 
 ```bash
-git tag com.setsuodu.simdjson/1.0.0
-git push origin com.setsuodu.simdjson/1.0.0
+git tag com.setsuodu.simdjson/v1.0.0
+git push origin com.setsuodu.simdjson/v1.0.0
 ```
 
 3. Workflow [Build Native Plugins](../../.github/workflows/build-native.yml) runs, builds Win + Android, and creates a [GitHub Release](https://github.com/setsuodu/simdjson/releases) for that tag with the zip + binaries.
@@ -94,7 +94,7 @@ Per [ADR-0003](https://github.com/LongLongGames/.github/blob/main/docs/adr/0003-
 
 | Use | Tag format | Example |
 |-----|------------|---------|
-| This Unity package | `com.setsuodu.simdjson/<semver>` | `com.setsuodu.simdjson/1.0.0` |
+| This Unity package | `com.setsuodu.simdjson/<semver>` | `com.setsuodu.simdjson/v1.0.0` |
 
 **Rules**
 
