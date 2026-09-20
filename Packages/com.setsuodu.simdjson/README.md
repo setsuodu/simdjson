@@ -39,11 +39,42 @@ using (var hello = root.FindField("hello"))
 }
 ```
 
+## Releasing / Git tags (OpenUPM)
+
+Per [ADR-0003](https://github.com/LongLongGames/.github/blob/main/docs/adr/0003-openupm-gittagprefix.md):
+
+| Purpose | Tag format | Consumer |
+|---------|------------|----------|
+| **This Unity package** | `com.setsuodu.simdjson/<semver>` | OpenUPM |
+| Example | `com.setsuodu.simdjson/1.0.0` | |
+
+**Rules**
+
+- Package tags **must** use the package name + `/` prefix.
+- **Do not** create bare tags (`1.0.0`, `v1.0.0`) — OpenUPM scans all tags and will mis-ingest them.
+- Do **not** put `gitTagPrefix` in `package.json` (not a Unity field). Set it only in OpenUPM metadata:
+
+  ```yaml
+  # openupm/openupm → data/packages/com.setsuodu.simdjson.yml
+  name: com.setsuodu.simdjson
+  gitTagPrefix: 'com.setsuodu.simdjson/'
+  ```
+
+- `package.json` `version` must match the version segment of the tag.
+
+```bash
+# Release example
+git tag com.setsuodu.simdjson/1.0.0
+git push origin com.setsuodu.simdjson/1.0.0
+```
+
+CI runs on those tags and attaches multi-platform native plugins to the GitHub Release.
+
 ## Building the Native Plugin
 
 ### CI (recommended)
 
-GitHub Actions workflow [`.github/workflows/build-native.yml`](../../.github/workflows/build-native.yml) builds for:
+Workflow [`.github/workflows/build-native.yml`](../../.github/workflows/build-native.yml) builds:
 
 | Platform | Arch     | Output                        |
 |----------|----------|-------------------------------|
@@ -53,11 +84,11 @@ GitHub Actions workflow [`.github/workflows/build-native.yml`](../../.github/wor
 | macOS    | arm64    | `libsimdjson_unity.dylib`     |
 | macOS    | x86_64   | `libsimdjson_unity.dylib`     |
 
-- **Automatic** on push/PR that touch `Native/`
-- **Manual**: Actions → *Build Native Plugins* → Run workflow
-  - Optional: check **commit_plugins** to push binaries back into `Runtime/Plugins/`
+Triggers:
 
-Artifacts are uploaded as `native-<platform>-<arch>` and a combined `unity-plugins-all`.
+- Push/PR touching `Native/`
+- Tags matching `com.setsuodu.simdjson/*`
+- Manual: Actions → *Build Native Plugins* (optional **commit_plugins**)
 
 ### Local build
 
@@ -65,14 +96,12 @@ Artifacts are uploaded as `native-<platform>-<arch>` and a combined `unity-plugi
 cd Packages/com.setsuodu.simdjson/Native
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-# macOS arm64 example:
+# macOS arm64:
 # cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
 cmake --build . --config Release
 ```
 
-Copy the resulting shared library into the matching folder under `Runtime/Plugins/` and set Unity plugin import settings (CPU / OS).
-
-Suggested layout:
+Copy into `Runtime/Plugins/` and set Unity import settings (CPU / OS):
 
 ```
 Runtime/Plugins/

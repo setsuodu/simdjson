@@ -1,11 +1,20 @@
 name: Build Native Plugins
 
+# Tag convention (ADR-0003 / OpenUPM monorepo):
+#   Unity package tags MUST be: com.setsuodu.simdjson/<semver>
+#   e.g. com.setsuodu.simdjson/1.0.0
+# Do NOT use bare tags (v1.0.0, 1.0.0) — OpenUPM scans all tags and will mis-ingest them.
+# gitTagPrefix belongs only in openupm/openupm data/packages YAML, never in package.json.
+
 on:
   push:
     branches: [main, master]
     paths:
       - 'Packages/com.setsuodu.simdjson/Native/**'
       - '.github/workflows/build-native.yml'
+    tags:
+      # Only package-namespaced tags (OpenUPM-compatible)
+      - 'com.setsuodu.simdjson/*'
   pull_request:
     paths:
       - 'Packages/com.setsuodu.simdjson/Native/**'
@@ -24,6 +33,7 @@ permissions:
 env:
   NATIVE_DIR: Packages/com.setsuodu.simdjson/Native
   PLUGINS_DIR: Packages/com.setsuodu.simdjson/Runtime/Plugins
+  PACKAGE_NAME: com.setsuodu.simdjson
 
 jobs:
   build:
@@ -128,6 +138,7 @@ jobs:
             echo "runner=${{ matrix.os }}"
             echo "lib=${{ matrix.lib_name }}"
             echo "sha=${{ github.sha }}"
+            echo "ref=${{ github.ref }}"
             echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } > "$OUT/build-info.txt"
 
@@ -139,7 +150,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # Optional: assemble into Unity Plugins layout and (on manual dispatch) commit back
+  # Assemble into Unity Plugins layout; on package tag attach to GitHub Release
   package:
     name: Package plugins
     needs: build
@@ -163,13 +174,6 @@ jobs:
           PLUGINS="${{ env.PLUGINS_DIR }}"
           mkdir -p "$PLUGINS"
 
-          # Expected Unity-friendly layout:
-          #   Runtime/Plugins/x86_64/libsimdjson_unity.so          (Linux)
-          #   Runtime/Plugins/x86_64/simdjson_unity.dll             (Windows)
-          #   Runtime/Plugins/ARM64/libsimdjson_unity.so            (Linux arm64)
-          #   Runtime/Plugins/macOS/arm64/libsimdjson_unity.dylib
-          #   Runtime/Plugins/macOS/x86_64/libsimdjson_unity.dylib
-
           layout() {
             local src_dir="$1" dest_dir="$2" name="$3"
             mkdir -p "$dest_dir"
@@ -180,16 +184,11 @@ jobs:
             fi
           }
 
-          # Linux
-          layout "downloaded/native-linux-x86_64"  "$PLUGINS/x86_64"   "libsimdjson_unity.so"
-          layout "downloaded/native-linux-arm64"   "$PLUGINS/ARM64"    "libsimdjson_unity.so"
-
-          # Windows
-          layout "downloaded/native-windows-x86_64" "$PLUGINS/x86_64"  "simdjson_unity.dll"
-
-          # macOS
-          layout "downloaded/native-macos-arm64"  "$PLUGINS/macOS/arm64"  "libsimdjson_unity.dylib"
-          layout "downloaded/native-macos-x86_64" "$PLUGINS/macOS/x86_64" "libsimdjson_unity.dylib"
+          layout "downloaded/native-linux-x86_64"   "$PLUGINS/x86_64"        "libsimdjson_unity.so"
+          layout "downloaded/native-linux-arm64"    "$PLUGINS/ARM64"         "libsimdjson_unity.so"
+          layout "downloaded/native-windows-x86_64" "$PLUGINS/x86_64"        "simdjson_unity.dll"
+          layout "downloaded/native-macos-arm64"    "$PLUGINS/macOS/arm64"   "libsimdjson_unity.dylib"
+          layout "downloaded/native-macos-x86_64"   "$PLUGINS/macOS/x86_64"  "libsimdjson_unity.dylib"
 
           echo "=== Final Plugins tree ==="
           find "$PLUGINS" -type f | sort
@@ -220,3 +219,18 @@ jobs:
 
           git commit -m "chore: update native plugins from CI (${{ github.sha }})"
           git push
+
+      # On package tag (com.setsuodu.simdjson/<semver>): publish GitHub Release with plugins
+      - name: Create GitHub Release (package tag only)
+        if: startsWith(github.ref, format('refs/tags/{0}/', env.PACKAGE_NAME))
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            ${{ env.PLUGINS_DIR }}/x86_64/*
+            ${{ env.PLUGINS_DIR }}/ARM64/*
+            ${{ env.PLUGINS_DIR }}/macOS/arm64/*
+            ${{ env.PLUGINS_DIR }}/macOS/x86_64/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
