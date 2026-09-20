@@ -1,0 +1,33 @@
+{
+  "name": "com.setsuodu.simdjson",
+  "version": "1.0.0",
+  "displayName": "SimdJSON for Unity",
+  "description": "High-performance SIMD-accelerated JSON parser for Unity, powered by the simdjson C++ library. Provides a complete runtime C# API with native plugin, samples demonstrating all methods, and benchmarks against Newtonsoft.Json (com.unity.nuget.newtonsoft-json).",
+  "unity": "2021.3",
+  "unityRelease": "0f1",
+  "documentationUrl": "https://github.com/setsuodu/simdjson",
+  "changelogUrl": "",
+  "licensesUrl": "https://github.com/setsuodu/simdjson/blob/master/LICENSE",
+  "keywords": [
+    "json",
+    "simd",
+    "parser",
+    "performance",
+    "native",
+    "simdjson"
+  ],
+  "author": {
+    "name": "SimdJSON Unity Port",
+    "url": "https://github.com/setsuodu"
+  },
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  },
+  "samples": [
+    {
+      "displayName": "SimdJSON Samples & Benchmark",
+      "description": "Demonstrates all runtime API methods and includes a benchmark comparing against AOT-optimized Newtonsoft.Json.",
+      "path": "Samples~"
+    }
+  ]
+}
