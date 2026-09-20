@@ -64,7 +64,20 @@ namespace SimdJson
 
         public Parser()
         {
-            _handle = Native.SimdJson_CreateParser();
+            try
+            {
+                _handle = Native.SimdJson_CreateParser();
+            }
+            catch (DllNotFoundException e)
+            {
+                throw new SimdJsonException(SimdJsonError.Invalid,
+                    "Native library 'simdjson_unity' not found. " +
+                    "On Windows Editor place simdjson_unity.dll at:\n" +
+                    "  Packages/com.setsuodu.simdjson/Runtime/Plugins/x86_64/simdjson_unity.dll\n" +
+                    "Then set Plugin Importer: Editor + Win64, CPU x86_64. " +
+                    "Download from https://github.com/setsuodu/simdjson/releases\n" +
+                    "Original: " + e.Message);
+            }
             if (_handle == IntPtr.Zero)
                 throw new SimdJsonException(SimdJsonError.MemAlloc, "Failed to create parser");
         }
@@ -121,14 +134,22 @@ namespace SimdJson
                 error = SimdJsonError.Invalid;
                 return false;
             }
-            unsafe
+            try
             {
-                fixed (byte* ptr = utf8Json)
+                unsafe
                 {
-                    error = Native.SimdJson_Validate((IntPtr)ptr, (UIntPtr)utf8Json.Length);
+                    fixed (byte* ptr = utf8Json)
+                    {
+                        error = Native.SimdJson_Validate((IntPtr)ptr, (UIntPtr)utf8Json.Length);
+                    }
                 }
+                return error == SimdJsonError.Ok;
             }
-            return error == SimdJsonError.Ok;
+            catch (DllNotFoundException)
+            {
+                error = SimdJsonError.Invalid;
+                return false;
+            }
         }
 
         public static string Minify(string json)
@@ -163,7 +184,7 @@ namespace SimdJson
                 }
                 catch (DllNotFoundException)
                 {
-                    return "(native library not loaded)";
+                    return "(missing simdjson_unity — put simdjson_unity.dll under Runtime/Plugins/x86_64/)";
                 }
                 catch (Exception)
                 {
@@ -197,10 +218,7 @@ namespace SimdJson
         private IntPtr _handle;
         private bool _disposed;
 
-        internal Document(IntPtr handle)
-        {
-            _handle = handle;
-        }
+        internal Document(IntPtr handle) { _handle = handle; }
 
         public Element GetRoot()
         {
@@ -237,10 +255,7 @@ namespace SimdJson
         private IntPtr _handle;
         private bool _disposed;
 
-        internal Element(IntPtr handle)
-        {
-            _handle = handle;
-        }
+        internal Element(IntPtr handle) { _handle = handle; }
 
         public SimdJsonType Type
         {
@@ -297,7 +312,6 @@ namespace SimdJson
         public string GetString()
         {
             EnsureNotDisposed();
-            // DOM allows re-read; still use one pass with growable buffer.
             const int initial = 4096;
             byte[] buf = new byte[initial];
             UIntPtr len;
@@ -305,9 +319,7 @@ namespace SimdJson
             unsafe
             {
                 fixed (byte* p = buf)
-                {
                     err = Native.SimdJson_GetString(_handle, (IntPtr)p, (UIntPtr)buf.Length, out len);
-                }
             }
             if (err != SimdJsonError.Ok) throw new SimdJsonException(err);
             if ((int)len >= buf.Length - 1)
@@ -316,9 +328,7 @@ namespace SimdJson
                 unsafe
                 {
                     fixed (byte* p = buf)
-                    {
                         err = Native.SimdJson_GetString(_handle, (IntPtr)p, (UIntPtr)buf.Length, out len);
-                    }
                 }
                 if (err != SimdJsonError.Ok) throw new SimdJsonException(err);
             }
@@ -344,9 +354,7 @@ namespace SimdJson
             unsafe
             {
                 fixed (byte* kp = keyBytes)
-                {
                     err = Native.SimdJson_ObjectFindField(_handle, (IntPtr)kp, (UIntPtr)keyBytes.Length, out outVal);
-                }
             }
             if (err == SimdJsonError.NoSuchField) return null;
             if (err != SimdJsonError.Ok) throw new SimdJsonException(err);
@@ -365,10 +373,8 @@ namespace SimdJson
             unsafe
             {
                 fixed (byte* kp = keyBuf)
-                {
                     err = Native.SimdJson_ObjectAt(_handle, (UIntPtr)index,
                         (IntPtr)kp, (UIntPtr)keyBuf.Length, out keyLen, out outVal);
-                }
             }
             if (err == SimdJsonError.IndexOutOfBounds) return false;
             if (err != SimdJsonError.Ok) throw new SimdJsonException(err);
@@ -435,7 +441,6 @@ namespace SimdJson
 #if UNITY_IOS && !UNITY_EDITOR
         const string LibName = "__Internal";
 #else
-        // Unity resolves: Windows simdjson_unity.dll, Linux/Android libsimdjson_unity.so, macOS libsimdjson_unity.dylib
         const string LibName = "simdjson_unity";
 #endif
 
