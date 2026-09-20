@@ -5,6 +5,10 @@ name: Build Native Plugins
 #   e.g. com.setsuodu.simdjson/1.0.0
 # Do NOT use bare tags (v1.0.0, 1.0.0) — OpenUPM scans all tags and will mis-ingest them.
 # gitTagPrefix belongs only in openupm/openupm data/packages YAML, never in package.json.
+#
+# Releases:
+#   - Tag com.setsuodu.simdjson/x.y.z  → formal GitHub Release + zip assets
+#   - workflow_dispatch + publish_prerelease → draft/prerelease for testing
 
 on:
   push:
@@ -21,7 +25,12 @@ on:
   workflow_dispatch:
     inputs:
       commit_plugins:
-        description: 'Commit built plugins back to repo (main only)'
+        description: 'Commit built plugins back into Runtime/Plugins (main only)'
+        required: false
+        default: 'false'
+        type: boolean
+      publish_prerelease:
+        description: 'Also publish a GitHub pre-release with the zip (for testing)'
         required: false
         default: 'false'
         type: boolean
@@ -37,13 +46,11 @@ env:
   NDK_VERSION: r27c
 
 jobs:
-  # ── Windows (Editor / Standalone Win64) ───────────────────────────────────
   windows:
     name: Windows x86_64
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: lukka/get-cmake@latest
 
       - name: Configure & Build
@@ -54,7 +61,6 @@ jobs:
           mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release --parallel
-          find . -type f \( -name '*.dll' -o -name '*.so' -o -name '*.dylib' \) -ls || true
 
       - name: Collect
         shell: bash
@@ -65,7 +71,6 @@ jobs:
           LIB=$(find "${{ env.NATIVE_DIR }}/build" -type f -name 'simdjson_unity.dll' | head -n1)
           test -n "$LIB"
           cp "$LIB" "$OUT/simdjson_unity.dll"
-          ls -la "$OUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -74,7 +79,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # ── Android (NDK, multiple ABIs) ──────────────────────────────────────────
   android:
     name: Android ${{ matrix.abi }}
     runs-on: ubuntu-latest
@@ -84,10 +88,8 @@ jobs:
         abi:
           - arm64-v8a
           - armeabi-v7a
-          # - x86_64   # emulator only — uncomment when needed
     steps:
       - uses: actions/checkout@v4
-
       - uses: lukka/get-cmake@latest
 
       - name: Setup NDK
@@ -106,17 +108,13 @@ jobs:
           set -euo pipefail
           mkdir -p "build-android-${{ matrix.abi }}"
           cd "build-android-${{ matrix.abi }}"
-
           cmake .. \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=${{ env.ANDROID_API }} \
             -DANDROID_STL=c++_static \
             -DCMAKE_BUILD_TYPE=Release
-
           cmake --build . --config Release --parallel
-
-          find . -type f -name '*.so' -ls || true
 
       - name: Collect
         shell: bash
@@ -128,7 +126,6 @@ jobs:
             -type f -name 'libsimdjson_unity.so' | head -n1)
           test -n "$LIB"
           cp "$LIB" "$OUT/libsimdjson_unity.so"
-          ls -la "$OUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -137,21 +134,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # ── Optional desktop (disabled by default — re-enable when needed) ───────
-  # linux:
-  #   name: Linux x86_64
-  #   runs-on: ubuntu-latest
-  #   ...
-  #
-  # macos:
-  #   name: macOS arm64
-  #   runs-on: macos-latest
-  #   ...
-  # Avoid macos-13 (Intel) — runner pool is tiny and queues for hours.
-
-  # ── Package into Unity Plugins layout ─────────────────────────────────────
   package:
-    name: Package plugins
+    name: Package & Release
     needs: [windows, android]
     runs-on: ubuntu-latest
     if: always() && needs.windows.result == 'success' && needs.android.result == 'success'
@@ -164,7 +148,8 @@ jobs:
           pattern: native-*
           merge-multiple: false
 
-      - name: Layout into Runtime/Plugins
+      - name: Layout plugins + zip for Release
+        id: zip
         shell: bash
         run: |
           set -euo pipefail
@@ -174,28 +159,35 @@ jobs:
           layout() {
             local src="$1" dest="$2" name="$3"
             mkdir -p "$dest"
-            if [ -f "$src/$name" ]; then
-              cp -v "$src/$name" "$dest/$name"
-            else
-              echo "WARN: missing $src/$name"
-              exit 1
-            fi
+            cp -v "$src/$name" "$dest/$name"
           }
 
-          # Windows Editor / Standalone
-          layout downloaded/native-windows-x86_64 "$PLUGINS/x86_64" "simdjson_unity.dll"
+          layout downloaded/native-windows-x86_64        "$PLUGINS/x86_64"                 "simdjson_unity.dll"
+          layout downloaded/native-android-arm64-v8a     "$PLUGINS/Android/libs/arm64-v8a"  "libsimdjson_unity.so"
+          layout downloaded/native-android-armeabi-v7a   "$PLUGINS/Android/libs/armeabi-v7a" "libsimdjson_unity.so"
 
-          # Android (Unity expects ABI folder names under Android/)
-          layout downloaded/native-android-arm64-v8a  "$PLUGINS/Android/libs/arm64-v8a"  "libsimdjson_unity.so"
-          layout downloaded/native-android-armeabi-v7a "$PLUGINS/Android/libs/armeabi-v7a" "libsimdjson_unity.so"
+          # Version label for zip name
+          if [[ "${{ github.ref }}" == refs/tags/${{ env.PACKAGE_NAME }}/* ]]; then
+            VER="${GITHUB_REF_NAME#${{ env.PACKAGE_NAME }}/}"
+          else
+            VER="${GITHUB_SHA::7}"
+          fi
+          ZIP_NAME="simdjson-native-plugins-${VER}.zip"
 
-          echo "=== Final Plugins tree ==="
+          # Zip relative to Plugins root so extract path is clean
+          (cd "$PLUGINS" && zip -r "${{ github.workspace }}/${ZIP_NAME}" .)
+
+          echo "zip=${ZIP_NAME}" >> "$GITHUB_OUTPUT"
+          echo "ver=${VER}" >> "$GITHUB_OUTPUT"
+          ls -lh "${ZIP_NAME}"
           find "$PLUGINS" -type f | sort
 
       - uses: actions/upload-artifact@v4
         with:
           name: unity-plugins-all
-          path: ${{ env.PLUGINS_DIR }}/
+          path: |
+            ${{ env.PLUGINS_DIR }}/
+            ${{ steps.zip.outputs.zip }}
           retention-days: 30
 
       - name: Commit plugins back to repo
@@ -216,15 +208,46 @@ jobs:
           git commit -m "chore: update native plugins from CI (${{ github.sha }})"
           git push
 
-      - name: Create GitHub Release (package tag only)
+      # Formal release: only on package tag (OpenUPM-safe)
+      - name: Publish GitHub Release (package tag)
         if: startsWith(github.ref, format('refs/tags/{0}/', env.PACKAGE_NAME))
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            ${{ env.PLUGINS_DIR }}/x86_64/*
-            ${{ env.PLUGINS_DIR }}/Android/libs/arm64-v8a/*
-            ${{ env.PLUGINS_DIR }}/Android/libs/armeabi-v7a/*
+            ${{ steps.zip.outputs.zip }}
+            ${{ env.PLUGINS_DIR }}/x86_64/simdjson_unity.dll
+            ${{ env.PLUGINS_DIR }}/Android/libs/arm64-v8a/libsimdjson_unity.so
+            ${{ env.PLUGINS_DIR }}/Android/libs/armeabi-v7a/libsimdjson_unity.so
+          body: |
+            Native plugins for **${{ env.PACKAGE_NAME }}** `${{ steps.zip.outputs.ver }}`
+
+            | Platform | File |
+            |----------|------|
+            | Windows x64 | `simdjson_unity.dll` |
+            | Android arm64-v8a | `libsimdjson_unity.so` |
+            | Android armeabi-v7a | `libsimdjson_unity.so` |
+
+            Or download the all-in-one zip and extract into `Runtime/Plugins/`.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Optional pre-release from manual run (does NOT create OpenUPM-visible package tags)
+      - name: Publish pre-release (manual test)
+        if: >
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.publish_prerelease == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: native-ci-${{ github.sha }}
+          name: Native CI ${{ github.sha }}
+          prerelease: true
+          generate_release_notes: false
+          files: |
+            ${{ steps.zip.outputs.zip }}
+          body: |
+            CI pre-release of native plugins (not an OpenUPM package version).
+            SHA: `${{ github.sha }}`
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
