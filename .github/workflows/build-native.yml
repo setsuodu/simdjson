@@ -1,0 +1,222 @@
+name: Build Native Plugins
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'Packages/com.setsuodu.simdjson/Native/**'
+      - '.github/workflows/build-native.yml'
+  pull_request:
+    paths:
+      - 'Packages/com.setsuodu.simdjson/Native/**'
+      - '.github/workflows/build-native.yml'
+  workflow_dispatch:
+    inputs:
+      commit_plugins:
+        description: 'Commit built plugins back to repo (main only)'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  NATIVE_DIR: Packages/com.setsuodu.simdjson/Native
+  PLUGINS_DIR: Packages/com.setsuodu.simdjson/Runtime/Plugins
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - name: Linux x86_64
+            os: ubuntu-latest
+            platform: linux
+            arch: x86_64
+            lib_name: libsimdjson_unity.so
+            cmake_args: ""
+
+          # Linux aarch64 (native arm runner)
+          - name: Linux aarch64
+            os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            lib_name: libsimdjson_unity.so
+            cmake_args: ""
+
+          # Windows x86_64
+          - name: Windows x86_64
+            os: windows-latest
+            platform: windows
+            arch: x86_64
+            lib_name: simdjson_unity.dll
+            cmake_args: ""
+
+          # macOS arm64 (Apple Silicon)
+          - name: macOS arm64
+            os: macos-latest
+            platform: macos
+            arch: arm64
+            lib_name: libsimdjson_unity.dylib
+            cmake_args: "-DCMAKE_OSX_ARCHITECTURES=arm64"
+
+          # macOS x86_64 (Intel)
+          - name: macOS x86_64
+            os: macos-13
+            platform: macos
+            arch: x86_64
+            lib_name: libsimdjson_unity.dylib
+            cmake_args: "-DCMAKE_OSX_ARCHITECTURES=x86_64"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Configure & Build
+        shell: bash
+        working-directory: ${{ env.NATIVE_DIR }}
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          cd build
+
+          # shellcheck disable=SC2086
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            ${{ matrix.cmake_args }}
+
+          cmake --build . --config Release --parallel
+
+          echo "=== Build outputs ==="
+          find . -type f \( -name "*.so" -o -name "*.dll" -o -name "*.dylib" -o -name "*.a" \) -ls || true
+
+      - name: Collect artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="artifact/${{ matrix.platform }}/${{ matrix.arch }}"
+          mkdir -p "$OUT"
+
+          # Locate the built shared library (CMake may put it under build/, build/Release/, etc.)
+          LIB=$(find "${{ env.NATIVE_DIR }}/build" -type f \
+            \( -name "${{ matrix.lib_name }}" -o -name "*simdjson_unity*" \) \
+            ! -name "*.lib" ! -name "*.exp" ! -name "*.pdb" \
+            | head -n 1)
+
+          if [ -z "$LIB" ]; then
+            echo "ERROR: could not find built library"
+            find "${{ env.NATIVE_DIR }}/build" -type f | head -50
+            exit 1
+          fi
+
+          echo "Found: $LIB"
+          cp "$LIB" "$OUT/${{ matrix.lib_name }}"
+          ls -la "$OUT"
+
+          # Record build info
+          {
+            echo "platform=${{ matrix.platform }}"
+            echo "arch=${{ matrix.arch }}"
+            echo "runner=${{ matrix.os }}"
+            echo "lib=${{ matrix.lib_name }}"
+            echo "sha=${{ github.sha }}"
+            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > "$OUT/build-info.txt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}-${{ matrix.arch }}
+          path: artifact/${{ matrix.platform }}/${{ matrix.arch }}/
+          if-no-files-found: error
+          retention-days: 30
+
+  # Optional: assemble into Unity Plugins layout and (on manual dispatch) commit back
+  package:
+    name: Package plugins
+    needs: build
+    runs-on: ubuntu-latest
+    if: always() && needs.build.result == 'success'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+          pattern: native-*
+          merge-multiple: false
+
+      - name: Layout into Runtime/Plugins
+        shell: bash
+        run: |
+          set -euo pipefail
+          PLUGINS="${{ env.PLUGINS_DIR }}"
+          mkdir -p "$PLUGINS"
+
+          # Expected Unity-friendly layout:
+          #   Runtime/Plugins/x86_64/libsimdjson_unity.so          (Linux)
+          #   Runtime/Plugins/x86_64/simdjson_unity.dll             (Windows)
+          #   Runtime/Plugins/ARM64/libsimdjson_unity.so            (Linux arm64)
+          #   Runtime/Plugins/macOS/arm64/libsimdjson_unity.dylib
+          #   Runtime/Plugins/macOS/x86_64/libsimdjson_unity.dylib
+
+          layout() {
+            local src_dir="$1" dest_dir="$2" name="$3"
+            mkdir -p "$dest_dir"
+            if [ -f "$src_dir/$name" ]; then
+              cp -v "$src_dir/$name" "$dest_dir/$name"
+            else
+              echo "WARN: missing $src_dir/$name"
+            fi
+          }
+
+          # Linux
+          layout "downloaded/native-linux-x86_64"  "$PLUGINS/x86_64"   "libsimdjson_unity.so"
+          layout "downloaded/native-linux-arm64"   "$PLUGINS/ARM64"    "libsimdjson_unity.so"
+
+          # Windows
+          layout "downloaded/native-windows-x86_64" "$PLUGINS/x86_64"  "simdjson_unity.dll"
+
+          # macOS
+          layout "downloaded/native-macos-arm64"  "$PLUGINS/macOS/arm64"  "libsimdjson_unity.dylib"
+          layout "downloaded/native-macos-x86_64" "$PLUGINS/macOS/x86_64" "libsimdjson_unity.dylib"
+
+          echo "=== Final Plugins tree ==="
+          find "$PLUGINS" -type f | sort
+
+      - name: Upload packaged plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: unity-plugins-all
+          path: ${{ env.PLUGINS_DIR }}/
+          retention-days: 30
+
+      - name: Commit plugins back to repo
+        if: >
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.commit_plugins == 'true' &&
+          github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "${{ env.PLUGINS_DIR }}"
+          if git diff --staged --quiet; then
+            echo "No plugin changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: update native plugins from CI (${{ github.sha }})"
+          git push
