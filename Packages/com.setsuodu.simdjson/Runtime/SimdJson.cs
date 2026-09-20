@@ -5,9 +5,6 @@ using UnityEngine;
 
 namespace SimdJson
 {
-    /// <summary>
-    /// Error codes returned by the native simdjson library.
-    /// </summary>
     public enum SimdJsonError
     {
         Ok = 0,
@@ -39,9 +36,6 @@ namespace SimdJson
         Invalid = 26
     }
 
-    /// <summary>
-    /// JSON value type.
-    /// </summary>
     public enum SimdJsonType
     {
         Null = 0,
@@ -52,9 +46,6 @@ namespace SimdJson
         Object = 5
     }
 
-    /// <summary>
-    /// Exception thrown when a simdjson operation fails.
-    /// </summary>
     public class SimdJsonException : Exception
     {
         public SimdJsonError ErrorCode { get; }
@@ -66,10 +57,6 @@ namespace SimdJson
         }
     }
 
-    /// <summary>
-    /// High-performance SIMD JSON parser powered by the native simdjson library.
-    /// Thread-safety: create one parser per thread for best performance.
-    /// </summary>
     public sealed class Parser : IDisposable
     {
         private IntPtr _handle;
@@ -82,9 +69,6 @@ namespace SimdJson
                 throw new SimdJsonException(SimdJsonError.MemAlloc, "Failed to create parser");
         }
 
-        /// <summary>
-        /// Parse a JSON string and return a Document. Caller must dispose the Document.
-        /// </summary>
         public Document Parse(string json)
         {
             if (json == null) throw new ArgumentNullException(nameof(json));
@@ -92,18 +76,12 @@ namespace SimdJson
             return Parse(bytes);
         }
 
-        /// <summary>
-        /// Parse UTF-8 JSON bytes.
-        /// </summary>
         public Document Parse(byte[] utf8Json)
         {
             if (utf8Json == null) throw new ArgumentNullException(nameof(utf8Json));
             return Parse(utf8Json, 0, utf8Json.Length);
         }
 
-        /// <summary>
-        /// Parse a slice of UTF-8 JSON bytes.
-        /// </summary>
         public Document Parse(byte[] utf8Json, int offset, int length)
         {
             EnsureNotDisposed();
@@ -125,9 +103,6 @@ namespace SimdJson
             return new Document(docHandle);
         }
 
-        /// <summary>
-        /// Validate JSON without building a full document tree (fast path).
-        /// </summary>
         public static bool TryValidate(string json, out SimdJsonError error)
         {
             if (json == null)
@@ -156,14 +131,10 @@ namespace SimdJson
             return error == SimdJsonError.Ok;
         }
 
-        /// <summary>
-        /// Minify JSON (remove whitespace). Returns the minified string.
-        /// </summary>
         public static string Minify(string json)
         {
             if (json == null) throw new ArgumentNullException(nameof(json));
             byte[] bytes = Encoding.UTF8.GetBytes(json);
-            // allocate generous buffer
             byte[] outBuf = new byte[bytes.Length + 64];
             UIntPtr outLen;
             SimdJsonError err;
@@ -181,10 +152,25 @@ namespace SimdJson
             return Encoding.UTF8.GetString(outBuf, 0, (int)outLen);
         }
 
-        /// <summary>
-        /// Native library version string.
-        /// </summary>
-        public static string Version => Native.SimdJson_Version();
+        public static string Version
+        {
+            get
+            {
+                try
+                {
+                    IntPtr p = Native.SimdJson_VersionPtr();
+                    return p == IntPtr.Zero ? "unknown" : Marshal.PtrToStringAnsi(p);
+                }
+                catch (DllNotFoundException)
+                {
+                    return "(native library not loaded)";
+                }
+                catch (Exception)
+                {
+                    return "unknown";
+                }
+            }
+        }
 
         public void Dispose()
         {
@@ -206,10 +192,6 @@ namespace SimdJson
         }
     }
 
-    /// <summary>
-    /// Owns a parsed JSON document. Must outlive any Element obtained from it.
-    /// On-demand: elements are single-pass; iterate carefully.
-    /// </summary>
     public sealed class Document : IDisposable
     {
         private IntPtr _handle;
@@ -220,9 +202,6 @@ namespace SimdJson
             _handle = handle;
         }
 
-        /// <summary>
-        /// Get the root element of the document.
-        /// </summary>
         public Element GetRoot()
         {
             EnsureNotDisposed();
@@ -253,11 +232,6 @@ namespace SimdJson
         }
     }
 
-    /// <summary>
-    /// Represents a JSON value (null, bool, number, string, array, object).
-    /// Dispose when finished to free native resources.
-    /// Note: due to on-demand design, some operations consume the element.
-    /// </summary>
     public sealed class Element : IDisposable
     {
         private IntPtr _handle;
@@ -323,13 +297,11 @@ namespace SimdJson
         public string GetString()
         {
             EnsureNotDisposed();
-            // first query length
+            // DOM allows re-read; still use one pass with growable buffer.
+            const int initial = 4096;
+            byte[] buf = new byte[initial];
             UIntPtr len;
-            var err = Native.SimdJson_GetString(_handle, IntPtr.Zero, UIntPtr.Zero, out len);
-            if (err != SimdJsonError.Ok) throw new SimdJsonException(err);
-            if ((int)len == 0) return string.Empty;
-
-            byte[] buf = new byte[(int)len + 1];
+            SimdJsonError err;
             unsafe
             {
                 fixed (byte* p = buf)
@@ -338,10 +310,20 @@ namespace SimdJson
                 }
             }
             if (err != SimdJsonError.Ok) throw new SimdJsonException(err);
+            if ((int)len >= buf.Length - 1)
+            {
+                buf = new byte[(int)len + 1];
+                unsafe
+                {
+                    fixed (byte* p = buf)
+                    {
+                        err = Native.SimdJson_GetString(_handle, (IntPtr)p, (UIntPtr)buf.Length, out len);
+                    }
+                }
+                if (err != SimdJsonError.Ok) throw new SimdJsonException(err);
+            }
             return Encoding.UTF8.GetString(buf, 0, (int)len);
         }
-
-        // ---- Object helpers ----
 
         public int ObjectCount()
         {
@@ -352,9 +334,6 @@ namespace SimdJson
             return (int)count;
         }
 
-        /// <summary>
-        /// Find a field by key. Returns null if not found (or throws depending on mode).
-        /// </summary>
         public Element FindField(string key)
         {
             if (key == null) throw new ArgumentNullException(nameof(key));
@@ -374,15 +353,12 @@ namespace SimdJson
             return new Element(outVal);
         }
 
-        /// <summary>
-        /// Get object field at index (0-based). Also returns the key.
-        /// </summary>
         public bool TryGetObjectAt(int index, out string key, out Element value)
         {
             EnsureNotDisposed();
             key = null;
             value = null;
-            byte[] keyBuf = new byte[256];
+            byte[] keyBuf = new byte[512];
             UIntPtr keyLen;
             IntPtr outVal;
             SimdJsonError err;
@@ -400,8 +376,6 @@ namespace SimdJson
             value = new Element(outVal);
             return true;
         }
-
-        // ---- Array helpers ----
 
         public int ArrayCount()
         {
@@ -433,7 +407,6 @@ namespace SimdJson
             return true;
         }
 
-        // Convenience typed getters with path-like access for simple cases
         public Element this[string key] => FindField(key) ?? throw new SimdJsonException(SimdJsonError.NoSuchField, $"Key not found: {key}");
         public Element this[int index] => ArrayAt(index);
 
@@ -457,22 +430,12 @@ namespace SimdJson
         }
     }
 
-    /// <summary>
-    /// P/Invoke bindings to the native simdjson_unity library.
-    /// </summary>
     internal static class Native
     {
 #if UNITY_IOS && !UNITY_EDITOR
         const string LibName = "__Internal";
-#elif UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
-        const string LibName = "simdjson_unity";
-#elif UNITY_EDITOR_LINUX || UNITY_STANDALONE_LINUX
-        const string LibName = "simdjson_unity";
-#elif UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
-        const string LibName = "simdjson_unity";
-#elif UNITY_ANDROID
-        const string LibName = "simdjson_unity";
 #else
+        // Unity resolves: Windows simdjson_unity.dll, Linux/Android libsimdjson_unity.so, macOS libsimdjson_unity.dylib
         const string LibName = "simdjson_unity";
 #endif
 
@@ -533,7 +496,7 @@ namespace SimdJson
         [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
         public static extern SimdJsonError SimdJson_Validate(IntPtr json, UIntPtr length);
 
-        [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern string SimdJson_Version();
+        [DllImport(LibName, EntryPoint = "SimdJson_Version", CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr SimdJson_VersionPtr();
     }
 }

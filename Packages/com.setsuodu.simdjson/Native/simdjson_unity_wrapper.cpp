@@ -1,27 +1,31 @@
 #include "simdjson_unity_wrapper.h"
 #include "simdjson.h"
-#include <string>
-#include <memory>
-#include <vector>
 #include <cstring>
+#include <string>
+#include <string_view>
+
+// Use DOM API: random-access safe for Unity (ondemand is single-pass and
+// crashed after ObjectCount / double GetString).
 
 using namespace simdjson;
 
 struct ParserWrapper {
-    ondemand::parser parser;
+    dom::parser parser;
 };
 
 struct DocumentWrapper {
-    padded_string json;
-    ondemand::document doc;
-    // Keep elements alive via shared ownership of document
-    std::shared_ptr<void> keep_alive;
+    dom::element root; // owns document via parser's internal storage
+    // Keep parser-owned document alive: root references parser memory.
+    // We store the parser result by keeping a copy of the element tree
+    // through the document handle held by the parser on iterate.
+    // Actually dom::parser::parse returns element that references parser.
+    // Document must keep the parser OR we parse into a document.
+    std::unique_ptr<dom::parser> owned_parser; // if document owns parse
+    dom::document doc;
 };
 
 struct ElementWrapper {
-    ondemand::value value;
-    std::shared_ptr<DocumentWrapper> doc_owner; // keep document alive
-    // For object/array iteration we may need to store more
+    dom::element el;
 };
 
 static SimdJsonErrorCode ToErrorCode(error_code ec) {
@@ -72,13 +76,17 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_Parse(
 {
     if (!parser || !json || !out_doc) return SIMDJSON_ERROR_INVALID;
     auto* p = static_cast<ParserWrapper*>(parser);
+
     auto* dw = new (std::nothrow) DocumentWrapper();
     if (!dw) return SIMDJSON_ERROR_MEMALLOC;
-    dw->json = padded_string(json, length);
-    auto error = p->parser.iterate(dw->json).get(dw->doc);
-    if (error) {
+
+    // Each document gets its own parser instance so roots stay valid
+    // after the caller's Parser is reused.
+    dw->owned_parser = std::make_unique<dom::parser>();
+    auto err = dw->owned_parser->parse(json, length).get(dw->root);
+    if (err) {
         delete dw;
-        return ToErrorCode(error);
+        return ToErrorCode(err);
     }
     *out_doc = dw;
     return SIMDJSON_OK;
@@ -94,13 +102,9 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_GetRoot(
 {
     if (!doc || !out_elem) return SIMDJSON_ERROR_INVALID;
     auto* dw = static_cast<DocumentWrapper*>(doc);
-    ondemand::value root;
-    auto error = dw->doc.get_value().get(root);
-    if (error) return ToErrorCode(error);
-
     auto* ew = new (std::nothrow) ElementWrapper();
     if (!ew) return SIMDJSON_ERROR_MEMALLOC;
-    ew->value = std::move(root);
+    ew->el = dw->root;
     *out_elem = ew;
     return SIMDJSON_OK;
 }
@@ -112,16 +116,15 @@ SIMDJSON_UNITY_API void SimdJson_DestroyElement(SimdJsonElementHandle elem) {
 SIMDJSON_UNITY_API SimdJsonType SimdJson_GetType(SimdJsonElementHandle elem) {
     if (!elem) return SIMDJSON_TYPE_NULL;
     auto* ew = static_cast<ElementWrapper*>(elem);
-    ondemand::json_type t;
-    auto error = ew->value.type().get(t);
-    if (error) return SIMDJSON_TYPE_NULL;
-    switch (t) {
-        case ondemand::json_type::null: return SIMDJSON_TYPE_NULL;
-        case ondemand::json_type::boolean: return SIMDJSON_TYPE_BOOL;
-        case ondemand::json_type::number: return SIMDJSON_TYPE_NUMBER;
-        case ondemand::json_type::string: return SIMDJSON_TYPE_STRING;
-        case ondemand::json_type::array: return SIMDJSON_TYPE_ARRAY;
-        case ondemand::json_type::object: return SIMDJSON_TYPE_OBJECT;
+    switch (ew->el.type()) {
+        case dom::element_type::NULL_VALUE: return SIMDJSON_TYPE_NULL;
+        case dom::element_type::BOOL: return SIMDJSON_TYPE_BOOL;
+        case dom::element_type::INT64:
+        case dom::element_type::UINT64:
+        case dom::element_type::DOUBLE: return SIMDJSON_TYPE_NUMBER;
+        case dom::element_type::STRING: return SIMDJSON_TYPE_STRING;
+        case dom::element_type::ARRAY: return SIMDJSON_TYPE_ARRAY;
+        case dom::element_type::OBJECT: return SIMDJSON_TYPE_OBJECT;
         default: return SIMDJSON_TYPE_NULL;
     }
 }
@@ -132,7 +135,7 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_GetBool(
     if (!elem || !out_value) return SIMDJSON_ERROR_INVALID;
     auto* ew = static_cast<ElementWrapper*>(elem);
     bool b;
-    auto error = ew->value.get_bool().get(b);
+    auto error = ew->el.get(b);
     if (error) return ToErrorCode(error);
     *out_value = b ? 1 : 0;
     return SIMDJSON_OK;
@@ -144,7 +147,7 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_GetInt64(
     if (!elem || !out_value) return SIMDJSON_ERROR_INVALID;
     auto* ew = static_cast<ElementWrapper*>(elem);
     int64_t v;
-    auto error = ew->value.get_int64().get(v);
+    auto error = ew->el.get(v);
     if (error) return ToErrorCode(error);
     *out_value = v;
     return SIMDJSON_OK;
@@ -156,7 +159,7 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_GetUInt64(
     if (!elem || !out_value) return SIMDJSON_ERROR_INVALID;
     auto* ew = static_cast<ElementWrapper*>(elem);
     uint64_t v;
-    auto error = ew->value.get_uint64().get(v);
+    auto error = ew->el.get(v);
     if (error) return ToErrorCode(error);
     *out_value = v;
     return SIMDJSON_OK;
@@ -168,7 +171,7 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_GetDouble(
     if (!elem || !out_value) return SIMDJSON_ERROR_INVALID;
     auto* ew = static_cast<ElementWrapper*>(elem);
     double v;
-    auto error = ew->value.get_double().get(v);
+    auto error = ew->el.get(v);
     if (error) return ToErrorCode(error);
     *out_value = v;
     return SIMDJSON_OK;
@@ -183,12 +186,12 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_GetString(
     if (!elem || !out_length) return SIMDJSON_ERROR_INVALID;
     auto* ew = static_cast<ElementWrapper*>(elem);
     std::string_view sv;
-    auto error = ew->value.get_string().get(sv);
+    auto error = ew->el.get(sv);
     if (error) return ToErrorCode(error);
     *out_length = sv.size();
     if (buffer && buffer_capacity > 0) {
         size_t copy_len = sv.size() < (buffer_capacity - 1) ? sv.size() : (buffer_capacity - 1);
-        memcpy(buffer, sv.data(), copy_len);
+        std::memcpy(buffer, sv.data(), copy_len);
         buffer[copy_len] = '\0';
     }
     return SIMDJSON_OK;
@@ -199,15 +202,10 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_ObjectCount(
 {
     if (!elem || !out_count) return SIMDJSON_ERROR_INVALID;
     auto* ew = static_cast<ElementWrapper*>(elem);
-    ondemand::object obj;
-    auto error = ew->value.get_object().get(obj);
+    dom::object obj;
+    auto error = ew->el.get(obj);
     if (error) return ToErrorCode(error);
-    size_t count = 0;
-    for (auto field : obj) {
-        (void)field;
-        ++count;
-    }
-    *out_count = count;
+    *out_count = obj.size();
     return SIMDJSON_OK;
 }
 
@@ -219,16 +217,18 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_ObjectFindField(
 {
     if (!obj || !key || !out_value) return SIMDJSON_ERROR_INVALID;
     auto* ew = static_cast<ElementWrapper*>(obj);
-    ondemand::object o;
-    auto error = ew->value.get_object().get(o);
+    dom::object o;
+    auto error = ew->el.get(o);
     if (error) return ToErrorCode(error);
 
-    ondemand::value val;
-    error = o.find_field(std::string_view(key, key_len)).get(val);
+    std::string_view k(key, key_len);
+    dom::element val;
+    error = o[k].get(val);
     if (error) return ToErrorCode(error);
 
-    auto* new_ew = new ElementWrapper();
-    new_ew->value = std::move(val);
+    auto* new_ew = new (std::nothrow) ElementWrapper();
+    if (!new_ew) return SIMDJSON_ERROR_MEMALLOC;
+    new_ew->el = val;
     *out_value = new_ew;
     return SIMDJSON_OK;
 }
@@ -243,29 +243,23 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_ObjectAt(
 {
     if (!obj || !out_value || !out_key_len) return SIMDJSON_ERROR_INVALID;
     auto* ew = static_cast<ElementWrapper*>(obj);
-    ondemand::object o;
-    auto error = ew->value.get_object().get(o);
+    dom::object o;
+    auto error = ew->el.get(o);
     if (error) return ToErrorCode(error);
 
     size_t i = 0;
     for (auto field : o) {
         if (i == index) {
-            std::string_view key;
-            ondemand::value val;
-            error = field.unescaped_key().get(key);
-            if (error) return ToErrorCode(error);
-            error = field.value().get(val);
-            if (error) return ToErrorCode(error);
-
+            std::string_view key = field.key;
             *out_key_len = key.size();
             if (key_buffer && key_capacity > 0) {
                 size_t copy_len = key.size() < (key_capacity - 1) ? key.size() : (key_capacity - 1);
-                memcpy(key_buffer, key.data(), copy_len);
+                std::memcpy(key_buffer, key.data(), copy_len);
                 key_buffer[copy_len] = '\0';
             }
-
-            auto* new_ew = new ElementWrapper();
-            new_ew->value = std::move(val);
+            auto* new_ew = new (std::nothrow) ElementWrapper();
+            if (!new_ew) return SIMDJSON_ERROR_MEMALLOC;
+            new_ew->el = field.value;
             *out_value = new_ew;
             return SIMDJSON_OK;
         }
@@ -279,15 +273,10 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_ArrayCount(
 {
     if (!elem || !out_count) return SIMDJSON_ERROR_INVALID;
     auto* ew = static_cast<ElementWrapper*>(elem);
-    ondemand::array arr;
-    auto error = ew->value.get_array().get(arr);
+    dom::array arr;
+    auto error = ew->el.get(arr);
     if (error) return ToErrorCode(error);
-    size_t count = 0;
-    for (auto v : arr) {
-        (void)v;
-        ++count;
-    }
-    *out_count = count;
+    *out_count = arr.size();
     return SIMDJSON_OK;
 }
 
@@ -298,24 +287,16 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_ArrayAt(
 {
     if (!arr || !out_value) return SIMDJSON_ERROR_INVALID;
     auto* ew = static_cast<ElementWrapper*>(arr);
-    ondemand::array a;
-    auto error = ew->value.get_array().get(a);
+    dom::array a;
+    auto error = ew->el.get(a);
     if (error) return ToErrorCode(error);
+    if (index >= a.size()) return SIMDJSON_ERROR_INDEX_OUT_OF_BOUNDS;
 
-    size_t i = 0;
-    for (auto v : a) {
-        if (i == index) {
-            ondemand::value val;
-            error = v.get(val);
-            if (error) return ToErrorCode(error);
-            auto* new_ew = new ElementWrapper();
-            new_ew->value = std::move(val);
-            *out_value = new_ew;
-            return SIMDJSON_OK;
-        }
-        ++i;
-    }
-    return SIMDJSON_ERROR_INDEX_OUT_OF_BOUNDS;
+    auto* new_ew = new (std::nothrow) ElementWrapper();
+    if (!new_ew) return SIMDJSON_ERROR_MEMALLOC;
+    new_ew->el = a.at(index);
+    *out_value = new_ew;
+    return SIMDJSON_OK;
 }
 
 SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_Minify(
@@ -327,8 +308,7 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_Minify(
 {
     if (!json || !out_length) return SIMDJSON_ERROR_INVALID;
     if (!out_buffer || out_capacity == 0) {
-        // just compute length roughly
-        *out_length = length; // upper bound
+        *out_length = length;
         return SIMDJSON_OK;
     }
     size_t dst_len = out_capacity;
@@ -344,10 +324,9 @@ SIMDJSON_UNITY_API SimdJsonErrorCode SimdJson_Validate(
     size_t length)
 {
     if (!json) return SIMDJSON_ERROR_INVALID;
-    ondemand::parser parser;
-    padded_string ps(json, length);
-    ondemand::document doc;
-    auto error = parser.iterate(ps).get(doc);
+    dom::parser parser;
+    dom::element el;
+    auto error = parser.parse(json, length).get(el);
     return ToErrorCode(error);
 }
 
