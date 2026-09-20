@@ -73,8 +73,8 @@ Formal release:
 
 ```bash
 # bump version in package.json first
-git tag com.setsuodu.simdjson/1.0.1
-git push origin com.setsuodu.simdjson/1.0.1
+git tag com.setsuodu.simdjson/v1.0.0
+git push origin com.setsuodu.simdjson/v1.0.0
 ```
 
 CI builds Win + Android and attaches assets to [Releases](https://github.com/setsuodu/simdjson/releases).
@@ -93,11 +93,11 @@ gitTagPrefix: 'com.setsuodu.simdjson/'
 
 Earlier native code used **ondemand** (single-pass). Calling `ObjectCount()` then `FindField()`, or `GetString()` twice, could hard-crash the Editor.
 
-Current code uses **DOM** so repeated access is safe. **Rebuild / re-download plugins from a new CI run after this fix** — old `v1.0.0` binaries still contain the bug.
+Current code uses **DOM** so repeated access is safe. **Rebuild / re-download plugins from a new CI run after this fix**.
 
 ```bash
-git tag com.setsuodu.simdjson/1.0.1
-git push origin com.setsuodu.simdjson/1.0.1
+git tag com.setsuodu.simdjson/v1.0.0
+git push origin com.setsuodu.simdjson/v1.0.0
 ```
 
 ---

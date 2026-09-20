@@ -3,13 +3,17 @@ using System.Diagnostics;
 using System.Text;
 using UnityEngine;
 using SimdJson;
+using Debug = UnityEngine.Debug;
+
+#if HAS_NEWTONSOFT
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using Debug = UnityEngine.Debug;
+#endif
 
 /// <summary>
 /// Sample that demonstrates ALL runtime API methods of SimdJSON for Unity,
-/// and runs a benchmark against AOT-optimized com.unity.nuget.newtonsoft-json.
+/// and optionally runs a benchmark against AOT-optimized com.unity.nuget.newtonsoft-json
+/// when that package is present (define HAS_NEWTONSOFT via asmdef versionDefines).
 /// Attach to any GameObject and press Play, or call RunAll() from code.
 /// </summary>
 public class SimdJsonDemo : MonoBehaviour
@@ -54,7 +58,7 @@ public class SimdJsonDemo : MonoBehaviour
         string bad = "{\"ok\":true,\"n\":42"; // missing }
 
         if (Parser.TryValidate(good, out var err1))
-            Debug.Log($"Validate good JSON: OK");
+            Debug.Log("Validate good JSON: OK");
         else
             Debug.LogError($"Unexpected fail: {err1}");
 
@@ -113,7 +117,6 @@ public class SimdJsonDemo : MonoBehaviour
 
             using (var e = root.FindField("uintVal"))
             {
-                // may overflow signed; use GetUInt64 or GetDouble
                 try { Debug.Log($"uintVal (as double) = {e.GetDouble()}"); }
                 catch (Exception ex) { Debug.Log($"uintVal note: {ex.Message}"); }
             }
@@ -163,7 +166,6 @@ public class SimdJsonDemo : MonoBehaviour
                 }
             }
 
-            // FindField
             using (var a = root.FindField("a"))
             {
                 Debug.Log($"FindField(\"a\") => {a?.GetInt64()}");
@@ -205,7 +207,6 @@ public class SimdJsonDemo : MonoBehaviour
                 }
             }
 
-            // indexer
             using (var e = root[2])
                 Debug.Log($"root[2] = \"{e.GetString()}\"");
         }
@@ -270,8 +271,7 @@ public class SimdJsonDemo : MonoBehaviour
             using (var root = doc.GetRoot())
             using (var x = root["x"])
             {
-                // wrong type
-                x.GetString();
+                x.GetString(); // wrong type
             }
         }
         catch (SimdJsonException ex)
@@ -281,7 +281,7 @@ public class SimdJsonDemo : MonoBehaviour
     }
 
     // ------------------------------------------------------------------
-    // Benchmark vs Newtonsoft.Json
+    // Benchmark vs Newtonsoft.Json (optional)
     // ------------------------------------------------------------------
     void RunBenchmark()
     {
@@ -289,6 +289,7 @@ public class SimdJsonDemo : MonoBehaviour
         int iterations = BenchmarkIterations;
         Debug.Log($"Payload size: {Encoding.UTF8.GetByteCount(payload)} bytes, iterations: {iterations}");
 
+#if HAS_NEWTONSOFT
         // Warm-up
         for (int i = 0; i < 10; i++)
         {
@@ -320,6 +321,24 @@ public class SimdJsonDemo : MonoBehaviour
             Debug.Log($"Speedup: {nsPer / simdPer:F2}x faster than Newtonsoft.Json");
         else
             Debug.Log("Speedup: N/A");
+#else
+        // Only time SimdJSON; remind user to install Newtonsoft for comparison
+        for (int i = 0; i < 10; i++)
+            WarmSimd(payload);
+
+        var sw = Stopwatch.StartNew();
+        long checksum1 = 0;
+        for (int i = 0; i < iterations; i++)
+            checksum1 += BenchSimd(payload);
+        sw.Stop();
+        double simdMs = sw.Elapsed.TotalMilliseconds;
+        double simdPer = simdMs / iterations;
+
+        Debug.Log($"SimdJSON total: {simdMs:F2} ms  ({simdPer:F4} ms/op)  checksum={checksum1}");
+        Debug.LogWarning(
+            "Benchmark vs Newtonsoft skipped: package com.unity.nuget.newtonsoft-json is not installed.\n" +
+            "Install it (Package Manager or OpenUPM) to enable the comparison. API demos above still work.");
+#endif
     }
 
     static void WarmSimd(string json)
@@ -344,7 +363,6 @@ public class SimdJsonDemo : MonoBehaviour
             {
                 int n = r.ObjectCount();
                 sum += n;
-                // touch a few fields if present
                 using (var e = r.FindField("id")) if (e != null) sum += e.GetInt64();
             }
             else if (r.IsArray)
@@ -361,6 +379,7 @@ public class SimdJsonDemo : MonoBehaviour
         return sum;
     }
 
+#if HAS_NEWTONSOFT
     static void WarmNewtonsoft(string json)
     {
         var tok = JToken.Parse(json);
@@ -386,6 +405,7 @@ public class SimdJsonDemo : MonoBehaviour
         }
         return sum;
     }
+#endif
 
     static string BuildSmallJson()
     {

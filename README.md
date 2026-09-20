@@ -39,4 +39,17 @@ git push origin com.setsuodu.simdjson/v1.0.0
 
 Download from [Releases](https://github.com/setsuodu/simdjson/releases) (`simdjson-native-plugins-*.zip` or individual files) and place under `Runtime/Plugins/`.
 
+## Benchmark (Editor, Windows)
+
+Payload **21 974 bytes**, **500 iterations**, vs `com.unity.nuget.newtonsoft-json` (AOT-friendly path).
+
+| Parser | Total | Per op | Checksum |
+|--------|------:|-------:|---------:|
+| **SimdJSON** | **23.51 ms** | **0.0470 ms** | 1500 |
+| Newtonsoft.Json | 1808.95 ms | 3.6179 ms | 1500 |
+
+**Speedup: ~77× faster** than Newtonsoft.Json.
+
+Native library version under test: **simdjson 4.6.1**. Full API demo (Validate / Minify / Parse & Scalars / Object / Array / Nested / Error Handling) all passed.
+
 Details, local build, and sample API: see the [package README](Packages/com.setsuodu.simdjson/README.md).

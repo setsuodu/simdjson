@@ -21,9 +21,7 @@
     "name": "Setsuodu",
     "url": "https://github.com/setsuodu"
   },
-  "dependencies": {
-    "com.unity.nuget.newtonsoft-json": "3.2.1"
-  },
+  "dependencies": {},
   "samples": [
     {
       "displayName": "SimdJSON Samples & Benchmark",

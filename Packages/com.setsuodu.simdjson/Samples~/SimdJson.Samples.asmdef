@@ -1,0 +1,22 @@
+{
+    "name": "SimdJson.Samples",
+    "rootNamespace": "SimdJson.Samples",
+    "references": [
+        "GUID:fb6b6d7eeccf58348932418f65dee06f"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.nuget.newtonsoft-json",
+            "expression": "3.0.0",
+            "define": "HAS_NEWTONSOFT"
+        }
+    ],
+    "noEngineReferences": false
+}
